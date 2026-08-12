@@ -25,6 +25,7 @@ COPY docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh
 
 EXPOSE 8080
-# Start as root so entrypoint can chown the Fly volume, then drop to mcp.
+# Override the Node image ENTRYPOINT. Start as root so we can chown the
+# Fly volume, then drop privileges to mcp inside docker-entrypoint.sh.
 USER root
-CMD ["/app/docker-entrypoint.sh"]
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
