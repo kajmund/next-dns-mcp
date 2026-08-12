@@ -90,7 +90,26 @@ Claude kräver OAuth (Client ID + Secret). Konfigurera på **claude.ai** (synkas
 
 I iPhone-appen: **+ → Connectors** och aktivera NextDNS.
 
-> Lämna Client ID/Secret tomma om Claude använder Dynamic Client Registration hos dig — annars fyll i de statiska värdena ovan.
+## Anslut från ChatGPT
+
+ChatGPT visar en unik **Callback URL** per connector, typ:
+
+`https://chatgpt.com/connector/oauth/<id>`
+
+Den mönstret accepteras automatiskt av servern (ingen manuell registrering behövs).
+
+1. Aktivera Developer mode i ChatGPT om det behövs
+2. Lägg till MCP / connector med URL: `https://next-dns-mcp.fly.dev/mcp`
+3. **OAuth Client ID:** `nextdns-mcp-claude`
+4. **OAuth Client Secret:** samma som på Fly (`OAUTH_CLIENT_SECRET`)
+5. Lämna/ange den Callback URL ChatGPT visar (servern tillåter `chatgpt.com/connector/oauth/*`)
+6. Godkänn och ange `MCP_AUTH_TOKEN` på consent-sidan
+
+Om ChatGPT visar en ovanlig callback-URL, sätt den via Fly-secret:
+
+```bash
+fly secrets set OAUTH_EXTRA_REDIRECT_URIS="https://exakt-url-fran-chatgpt"
+```
 
 ## Miljövariabler
 
@@ -98,8 +117,9 @@ I iPhone-appen: **+ → Connectors** och aktivera NextDNS.
 |---|---|---|
 | `NEXTDNS_API_KEY` | ja | API-nyckel från NextDNS-kontot |
 | `MCP_AUTH_TOKEN` | ja | Bearer-token + lösenord på OAuth-consent |
-| `OAUTH_CLIENT_SECRET` | ja | Secret till Claude custom connector |
+| `OAUTH_CLIENT_SECRET` | ja | Secret till Claude/ChatGPT connector |
 | `OAUTH_CLIENT_ID` | nej | Default `nextdns-mcp-claude` |
+| `OAUTH_EXTRA_REDIRECT_URIS` | nej | Extra callback-URL:er (kommaseparerade) |
 | `PUBLIC_BASE_URL` | ja i prod | t.ex. `https://next-dns-mcp.fly.dev` |
 | `NEXTDNS_PROFILE_ID` | nej | Default-profil om `profileId` utelämnas |
 | `PORT` | nej | Default `8080` |

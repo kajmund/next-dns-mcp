@@ -78,7 +78,7 @@ export class MemoryOAuthProvider implements OAuthServerProvider {
       token_endpoint_auth_method: "client_secret_post",
       grant_types: ["authorization_code", "refresh_token"],
       response_types: ["code"],
-      client_name: "Claude NextDNS MCP",
+      client_name: "NextDNS MCP",
       scope: "mcp",
     });
 
@@ -98,6 +98,19 @@ export class MemoryOAuthProvider implements OAuthServerProvider {
         return full;
       },
     };
+  }
+
+  /**
+   * ChatGPT generates a unique callback URL per connector. Allow it on the
+   * static client (and any existing client) so authorize() accepts it.
+   */
+  allowRedirectUri(clientId: string, redirectUri: string): boolean {
+    const client = this.clients.get(clientId);
+    if (!client) return false;
+    if (!client.redirect_uris.includes(redirectUri)) {
+      client.redirect_uris.push(redirectUri);
+    }
+    return true;
   }
 
   async authorize(

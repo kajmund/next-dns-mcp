@@ -5,20 +5,27 @@ import express from "express";
 import { createMcpAuthMiddleware } from "./auth.js";
 import { loadConfig } from "./config.js";
 import { MemoryOAuthProvider } from "./oauth/memory-provider.js";
+import {
+  defaultStaticRedirectUris,
+  isTrustedConnectorRedirectUri,
+  parseExtraRedirectUris,
+} from "./oauth/redirects.js";
 import { createNextDnsMcpServer } from "./server.js";
 
 const config = loadConfig();
 const issuerUrl = new URL(config.publicBaseUrl);
 const mcpUrl = new URL("/mcp", config.publicBaseUrl);
 
+const staticRedirectUris = [
+  ...defaultStaticRedirectUris(),
+  ...parseExtraRedirectUris(process.env.OAUTH_EXTRA_REDIRECT_URIS),
+];
+
 const oauthProvider = new MemoryOAuthProvider({
   consentPassword: config.mcpAuthToken,
   staticClientId: config.oauthClientId,
   staticClientSecret: config.oauthClientSecret,
-  staticRedirectUris: [
-    "https://claude.ai/api/mcp/auth_callback",
-    "https://claude.com/api/mcp/auth_callback",
-  ],
+  staticRedirectUris,
 });
 
 const handler = createMcpHandler(() => createNextDnsMcpServer(config));
@@ -28,6 +35,35 @@ const app = express();
 app.set("trust proxy", true);
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json({ limit: "4mb" }));
+
+// ChatGPT uses https://chatgpt.com/connector/oauth/{unique_id}. Accept those
+// (and any OAUTH_EXTRA_REDIRECT_URIS) by injecting into the client allowlist
+// before the OAuth router's exact-match check runs.
+app.use((req, _res, next) => {
+  const path = req.path.replace(/\/$/, "") || "/";
+  if (path !== "/authorize") {
+    next();
+    return;
+  }
+
+  const clientId = String(
+    (req.method === "POST" ? req.body?.client_id : req.query.client_id) ?? "",
+  );
+  const redirectUri = String(
+    (req.method === "POST" ? req.body?.redirect_uri : req.query.redirect_uri) ?? "",
+  );
+
+  if (
+    clientId &&
+    redirectUri &&
+    (isTrustedConnectorRedirectUri(redirectUri) ||
+      staticRedirectUris.includes(redirectUri))
+  ) {
+    oauthProvider.allowRedirectUri(clientId, redirectUri);
+  }
+
+  next();
+});
 
 app.use(
   mcpAuthRouter({
@@ -52,7 +88,7 @@ app.post("/authorize/consent", (req, res) => {
 </body></html>`);
     return;
   }
-  // OAuth 2.1 / Claude expect 302 (not 307).
+  // OAuth 2.1 / Claude / ChatGPT expect 302 (not 307).
   res.redirect(302, result.redirectTo);
 });
 
@@ -75,6 +111,13 @@ app.get("/", (_req, res) => {
     oauth: {
       authorizationServer: "/.well-known/oauth-authorization-server",
       protectedResource: "/.well-known/oauth-protected-resource",
+      clientId: config.oauthClientId,
+      acceptedRedirects: [
+        "https://claude.ai/api/mcp/auth_callback",
+        "https://chatgpt.com/connector/oauth/{callback_id}",
+        "https://chatgpt.com/connector_platform_oauth_redirect",
+        ...parseExtraRedirectUris(process.env.OAUTH_EXTRA_REDIRECT_URIS),
+      ],
     },
   });
 });
