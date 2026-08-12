@@ -100,6 +100,22 @@ Transport: **Streamable HTTP**.
 | `nextdns_logs` | DNS-loggar |
 | `nextdns_get_section` / `nextdns_patch_section` | Nästlade sektioner |
 
+### Föräldrakontroll
+
+| Tool | Syfte |
+|---|---|
+| `nextdns_get_parental_control` | Hämta hela parentalControl |
+| `nextdns_list_available_services` | Katalog: appar/spel (minecraft, tiktok, …) |
+| `nextdns_list_available_categories` | Katalog: kategorier (porn, gaming, …) |
+| `nextdns_set_service` | Blockera/schemalägg app (`active`, `recreation`) |
+| `nextdns_remove_service` | Ta bort app-regel |
+| `nextdns_set_category` | Blockera/schemalägg kategori |
+| `nextdns_remove_category` | Ta bort kategori-regel |
+| `nextdns_set_recreation` | Sätt fritidstider + timezone |
+| `nextdns_set_parental_settings` | safeSearch / youtubeRestrictedMode / blockBypass |
+
+`recreation: true` = tillåten bara under fritidstiderna. `recreation: false` + `active: true` = alltid blockerad.
+
 ## Utveckling
 
 ```bash

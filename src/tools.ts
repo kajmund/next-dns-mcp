@@ -535,4 +535,349 @@ export function registerNextDnsTools(
         });
       }),
   );
+
+  registerParentalControlTools(server, client, defaultProfileId);
+}
+
+const timeOfDaySchema = z
+  .string()
+  .regex(/^\d{2}:\d{2}(:\d{2})?$/, 'Use "HH:MM" or "HH:MM:SS"')
+  .describe('Start/end time as "HH:MM" or "HH:MM:SS"');
+
+const dayWindowSchema = z
+  .object({
+    start: timeOfDaySchema,
+    end: timeOfDaySchema,
+  })
+  .nullable()
+  .describe("Recreation window for the day, or null to clear that day");
+
+const recreationTimesSchema = z.object({
+  monday: dayWindowSchema.optional(),
+  tuesday: dayWindowSchema.optional(),
+  wednesday: dayWindowSchema.optional(),
+  thursday: dayWindowSchema.optional(),
+  friday: dayWindowSchema.optional(),
+  saturday: dayWindowSchema.optional(),
+  sunday: dayWindowSchema.optional(),
+});
+
+type ServiceEntry = {
+  id: string;
+  active?: boolean;
+  recreation?: boolean;
+  website?: string;
+};
+
+type CategoryEntry = {
+  id: string;
+  active?: boolean;
+  recreation?: boolean;
+};
+
+function normalizeTime(value: string): string {
+  return value.length === 5 ? `${value}:00` : value;
+}
+
+async function listProfileServices(
+  client: NextDnsClient,
+  profileId: string,
+): Promise<ServiceEntry[]> {
+  const response = await client.request<{ data: ServiceEntry[] }>({
+    path: `/profiles/${profileId}/parentalControl/services`,
+  });
+  return response.data ?? [];
+}
+
+async function listProfileCategories(
+  client: NextDnsClient,
+  profileId: string,
+): Promise<CategoryEntry[]> {
+  const response = await client.request<{ data: CategoryEntry[] }>({
+    path: `/profiles/${profileId}/parentalControl/categories`,
+  });
+  return response.data ?? [];
+}
+
+async function upsertListEntry(
+  client: NextDnsClient,
+  profileId: string,
+  kind: "services" | "categories",
+  id: string,
+  active: boolean,
+  recreation: boolean,
+  existingIds: Set<string>,
+): Promise<unknown> {
+  const path = `/profiles/${profileId}/parentalControl/${kind}/${encodeURIComponent(id)}`;
+  const collection = `/profiles/${profileId}/parentalControl/${kind}`;
+  if (existingIds.has(id)) {
+    return client.request({
+      method: "PATCH",
+      path,
+      body: { active, recreation },
+    });
+  }
+  return client.request({
+    method: "POST",
+    path: collection,
+    body: { id, active, recreation },
+  });
+}
+
+function registerParentalControlTools(
+  server: McpServer,
+  client: NextDnsClient,
+  defaultProfileId?: string,
+): void {
+  server.registerTool(
+    "nextdns_get_parental_control",
+    {
+      description:
+        "Get parental control settings: services (apps/games), categories, recreation schedule, safeSearch, etc.",
+      inputSchema: z.object({
+        profileId: profileIdSchema.optional(),
+      }),
+    },
+    async ({ profileId }) =>
+      runTool(() => {
+        const id = resolveProfileId(profileId, defaultProfileId);
+        return client.request({ path: `/profiles/${id}/parentalControl` });
+      }),
+  );
+
+  server.registerTool(
+    "nextdns_list_available_services",
+    {
+      description:
+        "List the global NextDNS catalog of blockable apps/games/services (ids like minecraft, tiktok, steam).",
+      inputSchema: z.object({}),
+    },
+    async () => runTool(() => client.request({ path: "/parentalControl/services" })),
+  );
+
+  server.registerTool(
+    "nextdns_list_available_categories",
+    {
+      description:
+        "List the global NextDNS catalog of parental-control categories (porn, gambling, gaming, social-networks, …).",
+      inputSchema: z.object({}),
+    },
+    async () => runTool(() => client.request({ path: "/parentalControl/categories" })),
+  );
+
+  server.registerTool(
+    "nextdns_set_service",
+    {
+      description:
+        "Block or schedule an app/game/service. active=true blocks it; recreation=true allows it only during recreation times. Creates the entry if missing.",
+      inputSchema: z.object({
+        profileId: profileIdSchema.optional(),
+        serviceId: z
+          .string()
+          .min(1)
+          .describe("Service id from nextdns_list_available_services, e.g. minecraft, tiktok, steam"),
+        active: z.boolean().describe("Whether the service is blocked"),
+        recreation: z
+          .boolean()
+          .optional()
+          .describe("If true, blocked outside recreation hours only (default false)"),
+      }),
+    },
+    async ({ profileId, serviceId, active, recreation }) =>
+      runTool(async () => {
+        const id = resolveProfileId(profileId, defaultProfileId);
+        const existing = await listProfileServices(client, id);
+        const result = await upsertListEntry(
+          client,
+          id,
+          "services",
+          serviceId,
+          active,
+          recreation ?? false,
+          new Set(existing.map((s) => s.id)),
+        );
+        return { serviceId, active, recreation: recreation ?? false, result };
+      }),
+  );
+
+  server.registerTool(
+    "nextdns_remove_service",
+    {
+      description: "Remove a parental-control service entry from the profile.",
+      inputSchema: z.object({
+        profileId: profileIdSchema.optional(),
+        serviceId: z.string().min(1),
+      }),
+    },
+    async ({ profileId, serviceId }) =>
+      runTool(() => {
+        const id = resolveProfileId(profileId, defaultProfileId);
+        return client.request({
+          method: "DELETE",
+          path: `/profiles/${id}/parentalControl/services/${encodeURIComponent(serviceId)}`,
+        });
+      }),
+  );
+
+  server.registerTool(
+    "nextdns_set_category",
+    {
+      description:
+        "Block or schedule a content category. active=true blocks it; recreation=true allows it only during recreation times.",
+      inputSchema: z.object({
+        profileId: profileIdSchema.optional(),
+        categoryId: z
+          .string()
+          .min(1)
+          .describe(
+            "Category id from nextdns_list_available_categories, e.g. porn, gambling, gaming, social-networks, video-streaming",
+          ),
+        active: z.boolean(),
+        recreation: z.boolean().optional(),
+      }),
+    },
+    async ({ profileId, categoryId, active, recreation }) =>
+      runTool(async () => {
+        const id = resolveProfileId(profileId, defaultProfileId);
+        const existing = await listProfileCategories(client, id);
+        const result = await upsertListEntry(
+          client,
+          id,
+          "categories",
+          categoryId,
+          active,
+          recreation ?? false,
+          new Set(existing.map((c) => c.id)),
+        );
+        return { categoryId, active, recreation: recreation ?? false, result };
+      }),
+  );
+
+  server.registerTool(
+    "nextdns_remove_category",
+    {
+      description: "Remove a parental-control category entry from the profile.",
+      inputSchema: z.object({
+        profileId: profileIdSchema.optional(),
+        categoryId: z.string().min(1),
+      }),
+    },
+    async ({ profileId, categoryId }) =>
+      runTool(() => {
+        const id = resolveProfileId(profileId, defaultProfileId);
+        return client.request({
+          method: "DELETE",
+          path: `/profiles/${id}/parentalControl/categories/${encodeURIComponent(categoryId)}`,
+        });
+      }),
+  );
+
+  server.registerTool(
+    "nextdns_set_recreation",
+    {
+      description:
+        "Set recreation (fritid) schedule. Services/categories with recreation=true are allowed only inside these windows.",
+      inputSchema: z.object({
+        profileId: profileIdSchema.optional(),
+        timezone: z
+          .string()
+          .min(1)
+          .describe('IANA timezone, e.g. "Europe/Stockholm"'),
+        times: recreationTimesSchema.describe(
+          "Per-weekday windows. Omit days you do not want to change; set a day to null to clear it.",
+        ),
+      }),
+    },
+    async ({ profileId, timezone, times }) =>
+      runTool(async () => {
+        const id = resolveProfileId(profileId, defaultProfileId);
+        const current = await client.request<{
+          data: {
+            recreation?: {
+              timezone?: string;
+              times?: Record<string, { start?: string; end?: string } | null>;
+            };
+          };
+        }>({ path: `/profiles/${id}/parentalControl` });
+
+        const mergedTimes: Record<string, { start: string; end: string } | null> = {};
+        for (const [day, window] of Object.entries(current.data?.recreation?.times ?? {})) {
+          if (window?.start && window?.end) {
+            mergedTimes[day] = {
+              start: normalizeTime(window.start),
+              end: normalizeTime(window.end),
+            };
+          }
+        }
+
+        for (const [day, window] of Object.entries(times)) {
+          if (window === undefined) continue;
+          if (window === null) {
+            mergedTimes[day] = null;
+            continue;
+          }
+          mergedTimes[day] = {
+            start: normalizeTime(window.start),
+            end: normalizeTime(window.end),
+          };
+        }
+
+        // Drop nulls from payload — NextDNS expects absent days, not null objects.
+        const cleanedTimes: Record<string, { start: string; end: string }> = {};
+        for (const [day, window] of Object.entries(mergedTimes)) {
+          if (window) {
+            cleanedTimes[day] = window;
+          }
+        }
+
+        await client.request({
+          method: "PATCH",
+          path: `/profiles/${id}/parentalControl`,
+          body: {
+            recreation: {
+              timezone,
+              times: cleanedTimes,
+            },
+          },
+        });
+
+        return {
+          timezone,
+          times: cleanedTimes,
+        };
+      }),
+  );
+
+  server.registerTool(
+    "nextdns_set_parental_settings",
+    {
+      description:
+        "Update parental-control toggles: safeSearch, youtubeRestrictedMode, blockBypass.",
+      inputSchema: z.object({
+        profileId: profileIdSchema.optional(),
+        safeSearch: z.boolean().optional(),
+        youtubeRestrictedMode: z.boolean().optional(),
+        blockBypass: z.boolean().optional(),
+      }),
+    },
+    async ({ profileId, safeSearch, youtubeRestrictedMode, blockBypass }) =>
+      runTool(async () => {
+        const id = resolveProfileId(profileId, defaultProfileId);
+        const patch: Record<string, boolean> = {};
+        if (safeSearch !== undefined) patch.safeSearch = safeSearch;
+        if (youtubeRestrictedMode !== undefined) {
+          patch.youtubeRestrictedMode = youtubeRestrictedMode;
+        }
+        if (blockBypass !== undefined) patch.blockBypass = blockBypass;
+        if (Object.keys(patch).length === 0) {
+          throw new Error("Provide at least one of safeSearch, youtubeRestrictedMode, blockBypass");
+        }
+        await client.request({
+          method: "PATCH",
+          path: `/profiles/${id}/parentalControl`,
+          body: patch,
+        });
+        return { ok: true, ...patch };
+      }),
+  );
 }

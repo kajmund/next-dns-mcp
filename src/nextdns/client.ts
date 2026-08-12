@@ -70,6 +70,11 @@ export class NextDnsClient {
       throw new NextDnsApiError(response.status, parsed, `NextDNS API ${response.status}: ${detail}`);
     }
 
+    // NextDNS often returns 204 No Content for successful mutations.
+    if (parsed === null || parsed === "") {
+      return { ok: true, status: response.status } as T;
+    }
+
     return parsed as T;
   }
 }
