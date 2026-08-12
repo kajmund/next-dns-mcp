@@ -15,9 +15,12 @@ export type AppConfig = {
   port: number;
   host: string;
   allowedHosts: string[];
+  publicBaseUrl: string;
   nextdnsApiKey: string;
   defaultProfileId?: string;
-  mcpAuthToken?: string;
+  mcpAuthToken: string;
+  oauthClientId: string;
+  oauthClientSecret: string;
 };
 
 export function loadConfig(): AppConfig {
@@ -32,12 +35,19 @@ export function loadConfig(): AppConfig {
     .map((h) => h.trim())
     .filter(Boolean);
 
+  const publicBaseUrl = (
+    process.env.PUBLIC_BASE_URL?.trim() || `http://127.0.0.1:${port}`
+  ).replace(/\/$/, "");
+
   return {
     port,
     host,
     allowedHosts,
+    publicBaseUrl,
     nextdnsApiKey: required("NEXTDNS_API_KEY"),
     defaultProfileId: optional("NEXTDNS_PROFILE_ID"),
-    mcpAuthToken: optional("MCP_AUTH_TOKEN"),
+    mcpAuthToken: required("MCP_AUTH_TOKEN"),
+    oauthClientId: process.env.OAUTH_CLIENT_ID?.trim() || "nextdns-mcp-claude",
+    oauthClientSecret: required("OAUTH_CLIENT_SECRET"),
   };
 }

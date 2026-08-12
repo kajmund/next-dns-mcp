@@ -77,16 +77,34 @@ MCP-URL: `https://next-dns-mcp.fly.dev/mcp`
 
 Transport: **Streamable HTTP**.
 
+## Anslut från Claude (iPhone / web / Desktop)
+
+Claude kräver OAuth (Client ID + Secret). Konfigurera på **claude.ai** (synkas till iPhone-appen):
+
+1. **Customize → Connectors → Add custom connector**
+2. **URL:** `https://next-dns-mcp.fly.dev/mcp`
+3. **OAuth Client ID:** värdet av `OAUTH_CLIENT_ID` (default `nextdns-mcp-claude`)
+4. **OAuth Client Secret:** värdet av `OAUTH_CLIENT_SECRET` (Fly secret)
+5. Klicka **Add** → **Connect**
+6. I webbläsaren: ange `MCP_AUTH_TOKEN` som lösenord och godkänn
+
+I iPhone-appen: **+ → Connectors** och aktivera NextDNS.
+
+> Lämna Client ID/Secret tomma om Claude använder Dynamic Client Registration hos dig — annars fyll i de statiska värdena ovan.
+
 ## Miljövariabler
 
 | Variabel | Obligatorisk | Beskrivning |
 |---|---|---|
 | `NEXTDNS_API_KEY` | ja | API-nyckel från NextDNS-kontot |
-| `MCP_AUTH_TOKEN` | rekommenderas | Bearer-token som skyddar `/mcp` |
+| `MCP_AUTH_TOKEN` | ja | Bearer-token + lösenord på OAuth-consent |
+| `OAUTH_CLIENT_SECRET` | ja | Secret till Claude custom connector |
+| `OAUTH_CLIENT_ID` | nej | Default `nextdns-mcp-claude` |
+| `PUBLIC_BASE_URL` | ja i prod | t.ex. `https://next-dns-mcp.fly.dev` |
 | `NEXTDNS_PROFILE_ID` | nej | Default-profil om `profileId` utelämnas |
 | `PORT` | nej | Default `8080` |
 | `HOST` | nej | Default `0.0.0.0` |
-| `ALLOWED_HOSTS` | ja i prod | Kommaseparerade hostnames, t.ex. `next-dns-mcp.fly.dev` |
+| `ALLOWED_HOSTS` | nej | Reserved for future host checks |
 
 ## Verktyg (urval)
 

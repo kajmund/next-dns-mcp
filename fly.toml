@@ -11,6 +11,8 @@ primary_region = "arn"
   HOST = "0.0.0.0"
   PORT = "8080"
   ALLOWED_HOSTS = "next-dns-mcp.fly.dev"
+  PUBLIC_BASE_URL = "https://next-dns-mcp.fly.dev"
+  OAUTH_CLIENT_ID = "nextdns-mcp-claude"
 
 [http_service]
   internal_port = 8080
