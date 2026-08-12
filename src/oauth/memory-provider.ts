@@ -10,6 +10,8 @@ import type {
   OAuthClientInformationFull,
   OAuthTokens,
 } from "@modelcontextprotocol/core/internal";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import type { Response } from "express";
 
@@ -36,8 +38,22 @@ type IssuedToken = {
   refreshToken?: string;
 };
 
+type RefreshRecord = {
+  clientId: string;
+  scopes: string[];
+  resource?: string;
+  expiresAt: number;
+};
+
+type PersistedStore = {
+  clients: Array<[string, OAuthClientInformationFull]>;
+  accessTokens: Array<[string, IssuedToken]>;
+  refreshTokens: Array<[string, RefreshRecord]>;
+};
+
 const CODE_TTL_MS = 5 * 60 * 1000;
-const TOKEN_TTL_SEC = 60 * 60;
+const ACCESS_TOKEN_TTL_SEC = 7 * 24 * 60 * 60; // 7 days
+const REFRESH_TOKEN_TTL_SEC = 90 * 24 * 60 * 60; // 90 days
 const PENDING_TTL_MS = 10 * 60 * 1000;
 
 function randomToken(bytes = 32): string {
@@ -56,6 +72,8 @@ export type MemoryOAuthOptions = {
   staticClientId: string;
   staticClientSecret: string;
   staticRedirectUris: string[];
+  /** Persist clients/tokens across restarts (Fly volume path). */
+  storePath?: string;
 };
 
 export class MemoryOAuthProvider implements OAuthServerProvider {
@@ -63,18 +81,28 @@ export class MemoryOAuthProvider implements OAuthServerProvider {
   private readonly pending = new Map<string, PendingAuthorization>();
   private readonly codes = new Map<string, AuthorizationCode>();
   private readonly accessTokens = new Map<string, IssuedToken>();
-  private readonly refreshTokens = new Map<string, string>();
+  private readonly refreshTokens = new Map<string, RefreshRecord>();
+  private readonly storePath?: string;
+  private persistTimer: ReturnType<typeof setTimeout> | undefined;
 
   readonly clientsStore: OAuthRegisteredClientsStore;
 
   constructor(private readonly options: MemoryOAuthOptions) {
+    this.storePath = options.storePath;
+    this.loadFromDisk();
+
     const issuedAt = Math.floor(Date.now() / 1000);
+    const existing = this.clients.get(options.staticClientId);
     this.clients.set(options.staticClientId, {
       client_id: options.staticClientId,
       client_secret: options.staticClientSecret,
-      client_id_issued_at: issuedAt,
+      client_id_issued_at: existing?.client_id_issued_at ?? issuedAt,
       client_secret_expires_at: 0,
-      redirect_uris: options.staticRedirectUris,
+      // Merge persisted redirect URIs (e.g. ChatGPT callbacks) with defaults.
+      redirect_uris: uniqueStrings([
+        ...options.staticRedirectUris,
+        ...(existing?.redirect_uris ?? []),
+      ]),
       token_endpoint_auth_method: "client_secret_post",
       grant_types: ["authorization_code", "refresh_token"],
       response_types: ["code"],
@@ -95,6 +123,7 @@ export class MemoryOAuthProvider implements OAuthServerProvider {
           response_types: client.response_types ?? ["code"],
         };
         this.clients.set(clientId, full);
+        this.schedulePersist();
         return full;
       },
     };
@@ -109,6 +138,7 @@ export class MemoryOAuthProvider implements OAuthServerProvider {
     if (!client) return false;
     if (!client.redirect_uris.includes(redirectUri)) {
       client.redirect_uris.push(redirectUri);
+      this.schedulePersist();
     }
     return true;
   }
@@ -232,17 +262,23 @@ export class MemoryOAuthProvider implements OAuthServerProvider {
     resource?: URL,
   ): Promise<OAuthTokens> {
     this.gc();
-    const accessToken = this.refreshTokens.get(refreshToken);
-    if (!accessToken) {
+    const existing = this.refreshTokens.get(refreshToken);
+    if (!existing || existing.clientId !== client.client_id) {
       throw new InvalidGrantError("Unknown refresh token");
     }
-    const existing = this.accessTokens.get(accessToken);
-    if (!existing || existing.clientId !== client.client_id) {
-      throw new InvalidGrantError("Refresh token client mismatch");
+    if (existing.expiresAt <= Math.floor(Date.now() / 1000)) {
+      this.refreshTokens.delete(refreshToken);
+      this.schedulePersist();
+      throw new InvalidGrantError("Refresh token expired");
     }
 
-    this.accessTokens.delete(accessToken);
+    // Rotate refresh token.
     this.refreshTokens.delete(refreshToken);
+    for (const [access, issued] of this.accessTokens) {
+      if (issued.refreshToken === refreshToken) {
+        this.accessTokens.delete(access);
+      }
+    }
 
     return this.issueTokens(
       client.client_id,
@@ -285,30 +321,40 @@ export class MemoryOAuthProvider implements OAuthServerProvider {
       this.refreshTokens.delete(access.refreshToken);
     }
     this.accessTokens.delete(request.token);
+    this.refreshTokens.delete(request.token);
+    this.schedulePersist();
+  }
 
-    const mappedAccess = this.refreshTokens.get(request.token);
-    if (mappedAccess) {
-      this.accessTokens.delete(mappedAccess);
-      this.refreshTokens.delete(request.token);
+  flush(): void {
+    if (this.persistTimer) {
+      clearTimeout(this.persistTimer);
+      this.persistTimer = undefined;
     }
+    this.persistToDisk();
   }
 
   private issueTokens(clientId: string, scopes: string[], resource?: string): OAuthTokens {
     const accessToken = randomToken(32);
     const refreshToken = randomToken(32);
-    const expiresAt = Math.floor(Date.now() / 1000) + TOKEN_TTL_SEC;
+    const now = Math.floor(Date.now() / 1000);
     this.accessTokens.set(accessToken, {
       clientId,
       scopes,
       resource,
-      expiresAt,
+      expiresAt: now + ACCESS_TOKEN_TTL_SEC,
       refreshToken,
     });
-    this.refreshTokens.set(refreshToken, accessToken);
+    this.refreshTokens.set(refreshToken, {
+      clientId,
+      scopes,
+      resource,
+      expiresAt: now + REFRESH_TOKEN_TTL_SEC,
+    });
+    this.schedulePersist();
     return {
       access_token: accessToken,
       token_type: "bearer",
-      expires_in: TOKEN_TTL_SEC,
+      expires_in: ACCESS_TOKEN_TTL_SEC,
       scope: scopes.join(" "),
       refresh_token: refreshToken,
     };
@@ -316,6 +362,7 @@ export class MemoryOAuthProvider implements OAuthServerProvider {
 
   private gc(): void {
     const now = Date.now();
+    const nowSec = Math.floor(now / 1000);
     for (const [key, value] of this.pending) {
       if (value.createdAt + PENDING_TTL_MS <= now) this.pending.delete(key);
     }
@@ -323,12 +370,73 @@ export class MemoryOAuthProvider implements OAuthServerProvider {
       if (value.createdAt + CODE_TTL_MS <= now) this.codes.delete(key);
     }
     for (const [token, issued] of this.accessTokens) {
-      if (issued.expiresAt * 1000 <= now) {
-        if (issued.refreshToken) this.refreshTokens.delete(issued.refreshToken);
+      if (issued.expiresAt <= nowSec) {
         this.accessTokens.delete(token);
       }
     }
+    for (const [token, refresh] of this.refreshTokens) {
+      if (refresh.expiresAt <= nowSec) {
+        this.refreshTokens.delete(token);
+      }
+    }
   }
+
+  private schedulePersist(): void {
+    if (!this.storePath) return;
+    if (this.persistTimer) clearTimeout(this.persistTimer);
+    this.persistTimer = setTimeout(() => {
+      this.persistTimer = undefined;
+      this.persistToDisk();
+    }, 50);
+    this.persistTimer.unref?.();
+  }
+
+  private persistToDisk(): void {
+    if (!this.storePath) return;
+    try {
+      this.gc();
+      const payload: PersistedStore = {
+        clients: [...this.clients.entries()],
+        accessTokens: [...this.accessTokens.entries()],
+        refreshTokens: [...this.refreshTokens.entries()],
+      };
+      mkdirSync(dirname(this.storePath), { recursive: true });
+      const tmp = `${this.storePath}.tmp`;
+      writeFileSync(tmp, JSON.stringify(payload), { mode: 0o600 });
+      renameSync(tmp, this.storePath);
+    } catch (error) {
+      console.error("Failed to persist OAuth store:", error);
+    }
+  }
+
+  private loadFromDisk(): void {
+    if (!this.storePath || !existsSync(this.storePath)) return;
+    try {
+      const raw = readFileSync(this.storePath, "utf8");
+      const parsed = JSON.parse(raw) as PersistedStore;
+      for (const [id, client] of parsed.clients ?? []) {
+        this.clients.set(id, client);
+      }
+      for (const [token, issued] of parsed.accessTokens ?? []) {
+        this.accessTokens.set(token, issued);
+      }
+      for (const [token, refresh] of parsed.refreshTokens ?? []) {
+        // Backward compat: old format mapped refresh -> access token string.
+        if (typeof refresh === "string") continue;
+        this.refreshTokens.set(token, refresh);
+      }
+      this.gc();
+      console.error(
+        `Loaded OAuth store: ${this.clients.size} clients, ${this.accessTokens.size} access tokens, ${this.refreshTokens.size} refresh tokens`,
+      );
+    } catch (error) {
+      console.error("Failed to load OAuth store:", error);
+    }
+  }
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.filter(Boolean))];
 }
 
 function escapeHtml(value: string): string {

@@ -13,12 +13,18 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=8080
 ENV HOST=0.0.0.0
+ENV OAUTH_STORE_PATH=/data/oauth-store.json
 
-RUN addgroup -S mcp && adduser -S mcp -G mcp
+RUN apk add --no-cache su-exec \
+  && addgroup -S mcp && adduser -S mcp -G mcp
+
 COPY --from=build --chown=mcp:mcp /app/package.json /app/package-lock.json* ./
 COPY --from=build --chown=mcp:mcp /app/node_modules ./node_modules
 COPY --from=build --chown=mcp:mcp /app/dist ./dist
+COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh
 
-USER mcp
 EXPOSE 8080
-CMD ["node", "dist/index.js"]
+# Start as root so entrypoint can chown the Fly volume, then drop to mcp.
+USER root
+CMD ["/app/docker-entrypoint.sh"]

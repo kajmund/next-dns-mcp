@@ -21,6 +21,7 @@ export type AppConfig = {
   mcpAuthToken: string;
   oauthClientId: string;
   oauthClientSecret: string;
+  oauthStorePath: string;
 };
 
 export function loadConfig(): AppConfig {
@@ -49,5 +50,10 @@ export function loadConfig(): AppConfig {
     mcpAuthToken: required("MCP_AUTH_TOKEN"),
     oauthClientId: process.env.OAUTH_CLIENT_ID?.trim() || "nextdns-mcp-claude",
     oauthClientSecret: required("OAUTH_CLIENT_SECRET"),
+    oauthStorePath:
+      process.env.OAUTH_STORE_PATH?.trim() ||
+      (process.env.NODE_ENV === "production"
+        ? "/data/oauth-store.json"
+        : ".data/oauth-store.json"),
   };
 }

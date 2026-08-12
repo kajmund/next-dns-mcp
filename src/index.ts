@@ -26,13 +26,15 @@ const oauthProvider = new MemoryOAuthProvider({
   staticClientId: config.oauthClientId,
   staticClientSecret: config.oauthClientSecret,
   staticRedirectUris,
+  storePath: config.oauthStorePath,
 });
 
 const handler = createMcpHandler(() => createNextDnsMcpServer(config));
 const nodeHandler = toNodeHandler(handler);
 
 const app = express();
-app.set("trust proxy", true);
+// Fly terminates TLS; trust a single proxy hop.
+app.set("trust proxy", 1);
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json({ limit: "4mb" }));
 
@@ -73,6 +75,11 @@ app.use(
     resourceServerUrl: mcpUrl,
     resourceName: "NextDNS MCP",
     scopesSupported: ["mcp"],
+    // Avoid express-rate-limit fighting Fly's proxy headers.
+    authorizationOptions: { rateLimit: false },
+    tokenOptions: { rateLimit: false },
+    clientRegistrationOptions: { rateLimit: false },
+    revocationOptions: { rateLimit: false },
   }),
 );
 
@@ -135,6 +142,7 @@ const server = app.listen(config.port, config.host, () => {
 
 async function shutdown(signal: string) {
   console.error(`Received ${signal}, shutting down…`);
+  oauthProvider.flush();
   await new Promise<void>((resolve) => server.close(() => resolve()));
   await handler.close();
   process.exit(0);

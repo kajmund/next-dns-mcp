@@ -13,6 +13,11 @@ primary_region = "arn"
   ALLOWED_HOSTS = "next-dns-mcp.fly.dev"
   PUBLIC_BASE_URL = "https://next-dns-mcp.fly.dev"
   OAUTH_CLIENT_ID = "nextdns-mcp-claude"
+  OAUTH_STORE_PATH = "/data/oauth-store.json"
+
+[mounts]
+  source = "oauth_data"
+  destination = "/data"
 
 [http_service]
   internal_port = 8080
