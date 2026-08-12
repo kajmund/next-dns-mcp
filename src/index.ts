@@ -1,6 +1,6 @@
-import { createMcpExpressApp } from "@modelcontextprotocol/express";
 import { toNodeHandler } from "@modelcontextprotocol/node";
 import { createMcpHandler } from "@modelcontextprotocol/server";
+import express from "express";
 import { createBearerAuthMiddleware } from "./auth.js";
 import { loadConfig } from "./config.js";
 import { createNextDnsMcpServer } from "./server.js";
@@ -10,10 +10,11 @@ const config = loadConfig();
 const handler = createMcpHandler(() => createNextDnsMcpServer(config));
 const nodeHandler = toNodeHandler(handler);
 
-const app = createMcpExpressApp({
-  host: config.host,
-  allowedHosts: config.allowedHosts.length > 0 ? config.allowedHosts : undefined,
-});
+// Plain Express: Fly health checks hit /health with Host values that are not the
+// public hostname, so we avoid DNS-rebinding middleware on the whole app.
+// Public security is bearer auth on /mcp.
+const app = express();
+app.use(express.json({ limit: "4mb" }));
 
 app.get("/health", (_req, res) => {
   res.status(200).json({
